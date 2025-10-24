@@ -20,16 +20,19 @@ from raganything.utils import (
 
 
 class QueryMixin:
-    """QueryMixin class containing query functionality for RAGAnything"""
+    """查询处理函数"""
 
     def _generate_multimodal_cache_key(
         self, query: str, multimodal_content: List[Dict[str, Any]], mode: str, **kwargs
     ) -> str:
         """
-        Generate cache key for multimodal query
+        为多模态查询生成缓存键，防止后续重复读取
+        每一个查询会根据查询文本、查询模式等被映射为一个键，支持后续索引
+        整个RAGAnything是支持缓存键和结果的，但是这个函数只是返回映射后的查询的键
+        接收参数：原始文本查询、多模态内容、查询模式、额外参数（一些查询附带的其他参数比如是否流式输出等）
 
         Args:
-            query: Base query text
+            query: Base query text 
             multimodal_content: List of multimodal content
             mode: Query mode
             **kwargs: Additional parameters
@@ -39,7 +42,7 @@ class QueryMixin:
         """
         # Create a normalized representation of the query parameters
         cache_data = {
-            "query": query.strip(),
+            "query": query.strip(), # 去除字符串首尾的空格
             "mode": mode,
         }
 
@@ -50,7 +53,7 @@ class QueryMixin:
                 if isinstance(item, dict):
                     normalized_item = {}
                     for key, value in item.items():
-                        # For file paths, use basename to make cache more portable
+                        # 对于图像等文件，保留
                         if key in [
                             "img_path",
                             "image_path",
@@ -112,43 +115,43 @@ class QueryMixin:
         Returns:
             str: Query result
         """
-        if self.lightrag is None:
+        if self.lightrag is None: # 检查是否已经初始化lightrag实例
             raise ValueError(
                 "No LightRAG instance available. Please process documents first or provide a pre-initialized LightRAG instance."
             )
 
-        # Check if VLM enhanced query should be used
-        vlm_enhanced = kwargs.pop("vlm_enhanced", None)
+        # 检查是否采用了VLM增强模式
+        vlm_enhanced = kwargs.pop("vlm_enhanced", None) 
 
-        # Auto-determine VLM enhanced based on availability
+        # 检查是否有vision_model_func以及是否可用
         if vlm_enhanced is None:
             vlm_enhanced = (
                 hasattr(self, "vision_model_func")
                 and self.vision_model_func is not None
             )
 
-        # Use VLM enhanced query if enabled and available
+        # 如果启用了VLM增强并且相关查询，则启用VLM增强查询，后续转移给专用函数
         if (
             vlm_enhanced
             and hasattr(self, "vision_model_func")
             and self.vision_model_func
         ):
-            return await self.aquery_vlm_enhanced(query, mode=mode, **kwargs)
-        elif vlm_enhanced and (
+            return await self.aquery_vlm_enhanced(query, mode=mode, **kwargs) # await作用就是等待这个返回结果的时候可以执行别的函数而不至于阻塞
+        elif vlm_enhanced and ( # 启用了但是多模态功能不可用，则写入日志，继续进行纯文本处理
             not hasattr(self, "vision_model_func") or not self.vision_model_func
         ):
             self.logger.warning(
                 "VLM enhanced query requested but vision_model_func is not available, falling back to normal query"
             )
 
-        # Create query parameters
+        # 创建查询实例
         query_param = QueryParam(mode=mode, **kwargs)
 
         self.logger.info(f"Executing text query: {query[:100]}...")
         self.logger.info(f"Query mode: {mode}")
 
-        # Call LightRAG's query method
-        result = await self.lightrag.aquery(query, param=query_param)
+        # 直接执行lightrag的查询功能并返回结果
+        result = await self.lightrag.aquery(query, param=query_param) 
 
         self.logger.info("Text query completed")
         return result
@@ -161,7 +164,7 @@ class QueryMixin:
         **kwargs,
     ) -> str:
         """
-        Multimodal query - combines text and multimodal content for querying
+        用来处理多模态查询，接收文本查询以及相关的一些多模态内容，以及一些正常的查询参数
 
         Args:
             query: Base query text
@@ -202,27 +205,30 @@ class QueryMixin:
         self.logger.info(f"Executing multimodal query: {query[:100]}...")
         self.logger.info(f"Query mode: {mode}")
 
-        # If no multimodal content, fallback to pure text query
+        # 检查是否多模态内容存在，不存在则返回纯文本查询结果
         if not multimodal_content:
             self.logger.info("No multimodal content provided, executing text query")
             return await self.aquery(query, mode=mode, **kwargs)
 
-        # Generate cache key for multimodal query
+        # 为这个多模态查询生成查询Key缓存
         cache_key = self._generate_multimodal_cache_key(
             query, multimodal_content, mode, **kwargs
         )
 
         # Check cache if available and enabled
         cached_result = None
+        # 检查缓存功能是否可用
         if (
             hasattr(self, "lightrag")
             and self.lightrag
             and hasattr(self.lightrag, "llm_response_cache")
             and self.lightrag.llm_response_cache
         ):
+            # 检查当前缓存功能是否启用，默认启用
             if self.lightrag.llm_response_cache.global_config.get(
                 "enable_llm_cache", True
             ):
+                # 获取查询的答案
                 try:
                     cached_result = await self.lightrag.llm_response_cache.get_by_id(
                         cache_key
@@ -237,7 +243,7 @@ class QueryMixin:
                 except Exception as e:
                     self.logger.debug(f"Error accessing multimodal query cache: {e}")
 
-        # Process multimodal content to generate enhanced query text
+        # 处理多模态查询，之后，生成增强纯文本查询
         enhanced_query = await self._process_multimodal_query_content(
             query, multimodal_content
         )
@@ -246,10 +252,10 @@ class QueryMixin:
             f"Generated enhanced query length: {len(enhanced_query)} characters"
         )
 
-        # Execute enhanced query
+        # 调用纯文本查询
         result = await self.aquery(enhanced_query, mode=mode, **kwargs)
 
-        # Save to cache if available and enabled
+        # 保存答案缓存，如果相关功能可用
         if (
             hasattr(self, "lightrag")
             and self.lightrag
@@ -278,7 +284,7 @@ class QueryMixin:
                 except Exception as e:
                     self.logger.debug(f"Error saving multimodal query to cache: {e}")
 
-        # Ensure cache is persisted to disk
+        # 确保保存到本地
         if (
             hasattr(self, "lightrag")
             and self.lightrag
@@ -293,9 +299,10 @@ class QueryMixin:
         self.logger.info("Multimodal query completed")
         return result
 
+
     async def aquery_vlm_enhanced(self, query: str, mode: str = "mix", **kwargs) -> str:
         """
-        VLM enhanced query - replaces image paths in retrieved context with base64 encoded images for VLM processing
+        MLLM增强查询，将检索到的实体节点包含的多媒体内容路径中包含的内容提取出来一起发给MLLM
 
         Args:
             query: User query
@@ -305,7 +312,7 @@ class QueryMixin:
         Returns:
             str: VLM query result
         """
-        # Ensure VLM is available
+        # 检查功能是否正常
         if not hasattr(self, "vision_model_func") or not self.vision_model_func:
             raise ValueError(
                 "VLM enhanced query requires vision_model_func. "
@@ -317,21 +324,22 @@ class QueryMixin:
 
         self.logger.info(f"Executing VLM enhanced query: {query[:100]}...")
 
-        # Clear previous image cache
+        # 确保使用的是本轮信息，防止数据串联
         if hasattr(self, "_current_images_base64"):
             delattr(self, "_current_images_base64")
 
-        # 1. Get original retrieval prompt (without generating final answer)
+        # 1. 获取检索到的原始上下文
         query_param = QueryParam(mode=mode, only_need_prompt=True, **kwargs)
         raw_prompt = await self.lightrag.aquery(query, param=query_param)
 
         self.logger.debug("Retrieved raw prompt from LightRAG")
 
-        # 2. Extract and process image paths
+        # 2. 根据原始上下文获取相关信息
         enhanced_prompt, images_found = await self._process_image_paths_for_vlm(
             raw_prompt
         )
 
+        # 检查检索到的内容是否有多模态内容
         if not images_found:
             self.logger.info("No valid images found, falling back to normal query")
             # Fallback to normal query
@@ -340,10 +348,10 @@ class QueryMixin:
 
         self.logger.info(f"Processed {images_found} images for VLM")
 
-        # 3. Build VLM message format
+        # 3. 构建多模态消息
         messages = self._build_vlm_messages_with_images(enhanced_prompt, query)
 
-        # 4. Call VLM for question answering
+        # 4. 获取回答
         result = await self._call_vlm_with_multimodal_content(messages)
 
         self.logger.info("VLM enhanced query completed")
@@ -353,7 +361,7 @@ class QueryMixin:
         self, base_query: str, multimodal_content: List[Dict[str, Any]]
     ) -> str:
         """
-        Process multimodal query content to generate enhanced query text
+        处理多模态查询，生成优化后的增强文本查询
 
         Args:
             base_query: Base query text
@@ -367,17 +375,18 @@ class QueryMixin:
         enhanced_parts = [f"User query: {base_query}"]
 
         for i, content in enumerate(multimodal_content):
+            # 开始逐个处理其中的多模态内容
             content_type = content.get("type", "unknown")
             self.logger.info(
                 f"Processing {i+1}/{len(multimodal_content)} multimodal content: {content_type}"
             )
 
             try:
-                # Get appropriate processor
+                # 处理器
                 processor = get_processor_for_type(self.modal_processors, content_type)
 
                 if processor:
-                    # Generate content description
+                    # 获取文本描述
                     description = await self._generate_query_content_description(
                         processor, content, content_type
                     )
@@ -385,7 +394,7 @@ class QueryMixin:
                         f"\nRelated {content_type} content: {description}"
                     )
                 else:
-                    # If no appropriate processor, use basic description
+                    # 如果根据多模态数据类型，没有合适的处理器，则调用基本描述生成
                     basic_desc = str(content)[:200]
                     enhanced_parts.append(
                         f"\nRelated {content_type} content: {basic_desc}"
@@ -406,7 +415,7 @@ class QueryMixin:
         self, processor, content: Dict[str, Any], content_type: str
     ) -> str:
         """
-        Generate content description for query
+        获取查询中的多模态内容描述，根据不同的文件类型调用不同的处理器
 
         Args:
             processor: Multimodal processor
@@ -435,7 +444,7 @@ class QueryMixin:
     async def _describe_image_for_query(
         self, processor, content: Dict[str, Any]
     ) -> str:
-        """Generate image description for query"""
+        """生成图像描述"""
         image_path = content.get("img_path")
         captions = content.get("image_caption", content.get("img_caption", []))
         footnotes = content.get("image_footnote", content.get("img_footnote", []))
@@ -596,7 +605,7 @@ class QueryMixin:
         self, enhanced_prompt: str, user_query: str
     ) -> List[Dict]:
         """
-        Build VLM message format, using markers to correspond images with text positions
+        生成多模态prompt
 
         Args:
             enhanced_prompt: Enhanced prompt with image markers
@@ -669,7 +678,7 @@ class QueryMixin:
 
     async def _call_vlm_with_multimodal_content(self, messages: List[Dict]) -> str:
         """
-        Call VLM to process multimodal content
+        调用MLLM生成答案
 
         Args:
             messages: VLM message format
@@ -703,7 +712,7 @@ class QueryMixin:
     # Synchronous versions of query methods
     def query(self, query: str, mode: str = "mix", **kwargs) -> str:
         """
-        Synchronous version of pure text query
+        文本查询的同步版本，即开始查询阻塞到查询结束
 
         Args:
             query: Query text
@@ -727,7 +736,7 @@ class QueryMixin:
         **kwargs,
     ) -> str:
         """
-        Synchronous version of multimodal query
+        多模态查询同步版本
 
         Args:
             query: Base query text

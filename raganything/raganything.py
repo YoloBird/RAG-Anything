@@ -1,10 +1,10 @@
 """
-Complete document parsing + multimodal content insertion Pipeline
+完整的文档解析 + 多模态内容插入 pipeline
 
-This script integrates:
-1. Document parsing (using configurable parsers)
-2. Pure text content LightRAG insertion
-3. Specialized processing for multimodal content (using different processors)
+该脚本集成了
+1.文档解析（使用可配置的解析器）
+2.插入纯文本内容 LightRAG
+3.多模态内容的专门处理（使用不同的处理器）
 """
 
 import os
@@ -19,15 +19,15 @@ from dotenv import load_dotenv
 # Add project root directory to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Load environment variables from .env file BEFORE importing LightRAG
-# This is critical for TIKTOKEN_CACHE_DIR to work properly in offline environments
-# The OS environment variables take precedence over the .env file
-load_dotenv(dotenv_path=".env", override=False)
+# 在导入 LightRAG 之前从 .env 文件加载环境变量
+# 这对 TIKTOKEN_CACHE_DIR 在脱机环境下正常工作至关重要
+# 操作系统环境变量优先于 .env 文件
+load_dotenv(dotenv_path=".env", override=False) 
 
 from lightrag import LightRAG
 from lightrag.utils import logger
 
-# Import configuration and modules
+# 导入一些配置与模块
 from raganything.config import RAGAnythingConfig
 from raganything.query import QueryMixin
 from raganything.processor import ProcessorMixin
@@ -35,7 +35,7 @@ from raganything.batch import BatchMixin
 from raganything.utils import get_processor_supports
 from raganything.parser import MineruParser, DoclingParser
 
-# Import specialized processors
+# 导入特定的处理器
 from raganything.modalprocessors import (
     ImageModalProcessor,
     TableModalProcessor,
@@ -46,23 +46,26 @@ from raganything.modalprocessors import (
 )
 
 
-@dataclass
+@dataclass 
+# dataclass装饰器，主要作用就是去除一些重复性的工作，可以自行为开发者生成init等函数
+# 下面的一些参数证明了这一点，但是这些参数必须要写明类型，才会被自动添加到init中
 class RAGAnything(QueryMixin, ProcessorMixin, BatchMixin):
-    """Multimodal Document Processing Pipeline - Complete document parsing and insertion pipeline"""
+    """多模态文档解析 pipeline"""
 
     # Core Components
     # ---
+    # 前一部分是类型限制，后一部分field是限制默认值等
     lightrag: Optional[LightRAG] = field(default=None)
-    """Optional pre-initialized LightRAG instance."""
+    """可选是否预先加载LightRAG实例"""
 
     llm_model_func: Optional[Callable] = field(default=None)
-    """LLM model function for text analysis."""
+    """用于文本处理"""
 
     vision_model_func: Optional[Callable] = field(default=None)
-    """Vision model function for image analysis."""
+    """用于图像处理"""
 
     embedding_func: Optional[Callable] = field(default=None)
-    """Embedding function for text vectorization."""
+    """文本嵌入生成"""
 
     config: Optional[RAGAnythingConfig] = field(default=None)
     """Configuration object, if None will create with environment variables."""
